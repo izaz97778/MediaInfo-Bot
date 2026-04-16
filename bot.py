@@ -91,7 +91,7 @@ async def get_media_info(file_path):
     codec = None
     bit_depth = ""
     audio_languages = set()
-    subtitle = False
+    subtitle_languages = set()
 
     for stream in data.get("streams", []):
         if stream["codec_type"] == "video":
@@ -115,7 +115,8 @@ async def get_media_info(file_path):
             audio_languages.add(LANG_MAP.get(lang, lang.capitalize()))
 
         elif stream["codec_type"] == "subtitle":
-            subtitle = True
+            lang = stream.get("tags", {}).get("language", "und").lower()
+            subtitle_languages.add(LANG_MAP.get(lang, lang.capitalize()))
 
     return (
         duration,
@@ -123,7 +124,7 @@ async def get_media_info(file_path):
         codec,
         bit_depth,
         ", ".join(sorted(audio_languages)) if audio_languages else "Unknown",
-        subtitle
+        ", ".join(sorted(subtitle_languages)) if subtitle_languages else "No Sub"
     )
 
 
