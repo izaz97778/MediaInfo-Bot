@@ -171,7 +171,7 @@ async def process_message(message):
         video_line=video_line,
         duration=format_duration(duration) if duration else "Unknown",
         audio=audio or "Unknown",
-        subtitle="ESUB" if sub else "No Sub"
+        subtitle=sub
     )
 
     return caption, file_path
