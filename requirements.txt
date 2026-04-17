@@ -1,5 +1,5 @@
-pyrofork==2.3.45
-TgCrypto
 aiofiles==23.2.1
-psutil
+TgCrypto
+pyrofork==2.3.45
 apscheduler
+psutil
