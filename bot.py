@@ -171,7 +171,8 @@ def install_ffmpeg():
 
 async def get_media_info(file_path):
     cmd = [
-        "ffprobe", "-v", "error",
+        "ffprobe",
+        "-loglevel", "quiet",
         "-print_format", "json",
         "-show_streams",
         "-show_format",
