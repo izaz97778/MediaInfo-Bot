@@ -78,10 +78,12 @@ def get_video_format(codec: str, transfer: str = '', hdr: str = '', bit_depth: s
         format_info.append('HEVC')
     elif 'av1' in codec:
         format_info.append('AV1')
-    elif any(x in codec for x in ['avc', 'h.264', 'h264']):
+    elif any(x in codec for x in ['avc', 'avc1', 'h.264', 'h264']):
         format_info.append('x264')
     elif 'vp9' in codec:
         format_info.append('VP9')
+    elif any(x in codec for x in ['mpeg4', 'xvid']):
+        format_info.append('MPEG4')
     else:
         return None
 
