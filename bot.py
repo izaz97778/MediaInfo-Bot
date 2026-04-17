@@ -8,6 +8,8 @@ import psutil
 from aiofiles import open as aiopen
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
+from functools import lru_cache
+from typing import Optional
 
 from config import (
     API_ID, API_HASH, BOT_TOKEN,
@@ -22,44 +24,97 @@ logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
-app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=3)
+app = Client("MediaInfo-Bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=10)
 
 queue = asyncio.Queue()
 processing_lock = asyncio.Lock()
 
-LANG_MAP = {
-    "hin": "Hindi",
-    "mar": "Marathi",
-    "tam": "Tamil",
-    "tel": "Telugu",
-    "mal": "Malayalam",
-    "kan": "Kannada",
-    "eng": "English",
-    "hun": "Hungarian",
-    "ind": "Indonesian",
-    "ita": "Italian",
-    "jpn": "Japanese",
-    "kor": "Korean",
-    "chi": "Chinese",
-    "zho": "Chinese",
-    "spa": "Spanish",
-    "por": "Portuguese",
-    "tha": "Thai",
-    "pol": "Polish",
-    "fre": "French",
-    "fra": "French",
-    "ger": "German",
-    "deu": "German",
-    "ara": "Arabic",
-    "rus": "Russian",
-    "tur": "Turkish",
-    "vie": "Vietnamese",
-    "nld": "Dutch",
-    "und": "Unknown",
-    "multi": "Multi",
-    "dual": "Dual Audio"
+_LANGUAGE_MAP = {
+    'en': 'English','eng': 'English',
+    'hi': 'Hindi','hin': 'Hindi',
+    'ta': 'Tamil','tam': 'Tamil',
+    'te': 'Telugu','tel': 'Telugu',
+    'ml': 'Malayalam','mal': 'Malayalam',
+    'kn': 'Kannada','kan': 'Kannada',
+    'bn': 'Bengali','ben': 'Bengali',
+    'mr': 'Marathi','mar': 'Marathi',
+    'gu': 'Gujarati','guj': 'Gujarati',
+    'pa': 'Punjabi','pun': 'Punjabi',
+    'bho': 'Bhojpuri',
+    'zh': 'Chinese','chi': 'Chinese','cmn': 'Chinese',
+    'ko': 'Korean','kor': 'Korean',
+    'pt': 'Portuguese','por': 'Portuguese',
+    'th': 'Thai','tha': 'Thai',
+    'tl': 'Tagalog','tgl': 'Tagalog','fil': 'Tagalog',
+    'ja': 'Japanese','jpn': 'Japanese',
+    'es': 'Spanish','spa': 'Spanish',
+    'fr': 'French','fra': 'French','fre': 'French',
+    'de': 'German','deu': 'German','ger': 'German',
+    'it': 'Italian','ita': 'Italian',
+    'ru': 'Russian','rus': 'Russian',
+    'ar': 'Arabic','ara': 'Arabic',
+    'tr': 'Turkish','tur': 'Turkish',
+    'nl': 'Dutch','nld': 'Dutch',
+    'pl': 'Polish','pol': 'Polish',
+    'vi': 'Vietnamese','vie': 'Vietnamese',
+    'id': 'Indonesian','ind': 'Indonesian',
+    'unknown': 'Unknown'
 }
 
+@lru_cache(maxsize=256)
+def get_full_language_name(code: str) -> str:
+    if not code:
+        return 'Unknown'
+    return _LANGUAGE_MAP.get(code.lower(), code)
+
+def get_video_format(codec: str, transfer: str = '', hdr: str = '', bit_depth: str = '') -> Optional[str]:
+    if not codec:
+        return None
+
+    codec = codec.lower()
+    format_info = []
+
+    if any(x in codec for x in ['hevc', 'h.265', 'h265']):
+        format_info.append('HEVC')
+    elif 'av1' in codec:
+        format_info.append('AV1')
+    elif any(x in codec for x in ['avc', 'h.264', 'h264']):
+        format_info.append('x264')
+    elif 'vp9' in codec:
+        format_info.append('VP9')
+    else:
+        return None
+
+    try:
+        if bit_depth and int(bit_depth) == 10:
+            format_info.append('10bit')
+    except:
+        pass
+
+    transfer = transfer.lower()
+    hdr = hdr.lower()
+
+    if any(x in transfer for x in ['pq', 'hlg', 'smpte', '2084']) or 'hdr' in hdr:
+        format_info.append('HDR')
+
+    return ' '.join(format_info)
+
+def get_standard_resolution(height: int) -> Optional[str]:
+    if not height:
+        return None
+    if height <= 240: return "240p"
+    elif height <= 360: return "360p"
+    elif height <= 480: return "480p"
+    elif height <= 720: return "720p"
+    elif height <= 1080: return "1080p"
+    elif height <= 1440: return "1440p"
+    elif height <= 2160: return "2160p"
+    else: return "2160p+"
+
+def get_quality(width, height):
+    if not width or not height:
+        return None
+    return get_standard_resolution(min(width, height))
 
 def install_ffmpeg():
     try:
@@ -79,8 +134,7 @@ async def get_media_info(file_path):
     ]
 
     process = await asyncio.to_thread(
-        subprocess.run,
-        cmd,
+        subprocess.run, cmd,
         stdout=subprocess.PIPE,
         timeout=15,
         check=False
@@ -89,11 +143,11 @@ async def get_media_info(file_path):
     data = json.loads(process.stdout.decode("utf-8", errors="ignore"))
 
     duration = float(data.get("format", {}).get("duration", 0))
-    width = None
-    height = None
+    width = height = None
     codec = None
     bit_depth = ""
     hdr = ""
+    transfer = ""
 
     audio_languages = set()
     subtitle_languages = set()
@@ -104,46 +158,29 @@ async def get_media_info(file_path):
             width = stream.get("width") or stream.get("coded_width")
             height = stream.get("height") or stream.get("coded_height")
 
-            raw_codec = (stream.get("codec_name") or "").lower()
-
-            if raw_codec in ["hevc", "h265"]:
-                codec = "HEVC"
-            elif raw_codec in ["h264", "avc"]:
-                codec = "H264"
-            elif raw_codec == "av1":
-                codec = "AV1"
+            codec = (stream.get("codec_name") or "").lower()
 
             pix_fmt = (stream.get("pix_fmt") or "").lower()
             profile = (stream.get("profile") or "").lower()
 
-            if ("10le" in pix_fmt) or ("p010" in pix_fmt) or ("10bit" in profile):
-                bit_depth = "10Bit"
-            else:
-                bit_depth = ""
+            if "10" in pix_fmt or "10" in profile:
+                bit_depth = "10"
 
-            color_transfer = (stream.get("color_transfer") or "").lower()
-            color_space = (stream.get("color_space") or "").lower()
-            color_primaries = (stream.get("color_primaries") or "").lower()
-            profile_full = (stream.get("profile") or "").lower()
+            transfer = (stream.get("color_transfer") or "").lower()
 
-            if (
-                "smpte2084" in color_transfer or
-                "arib-std-b67" in color_transfer or
-                "bt2020" in color_space or
-                "bt2020" in color_primaries
-            ):
+            if any(x in transfer for x in ["smpte2084", "arib-std-b67", "pq", "hlg"]):
                 hdr = "HDR"
 
-            if "dolby" in profile_full:
+            if "dolby" in profile:
                 hdr = "Dolby Vision"
 
         elif stream.get("codec_type") == "audio":
-            lang = stream.get("tags", {}).get("language", "und").lower()
-            audio_languages.add(LANG_MAP.get(lang, lang.capitalize()))
+            lang = stream.get("tags", {}).get("language", "unknown")
+            audio_languages.add(get_full_language_name(lang))
 
         elif stream.get("codec_type") == "subtitle":
-            lang = stream.get("tags", {}).get("language", "und").lower()
-            subtitle_languages.add(LANG_MAP.get(lang, lang.capitalize()))
+            lang = stream.get("tags", {}).get("language", "unknown")
+            subtitle_languages.add(get_full_language_name(lang))
 
     return (
         duration,
@@ -152,53 +189,17 @@ async def get_media_info(file_path):
         codec,
         bit_depth,
         hdr,
+        transfer,
         ", ".join(sorted(audio_languages)) if audio_languages else "Unknown",
         ", ".join(sorted(subtitle_languages)) if subtitle_languages else "No Sub"
     )
-
 
 def format_duration(s):
     s = int(s)
     return f"{s//3600:02}:{(s%3600)//60:02}:{s%60:02}"
 
-
-def get_quality(width, height):
-    if not width or not height:
-        return None
-
-    w = max(width, height)
-    h = min(width, height)
-
-    if w >= 3500:
-        return "2160p"
-    elif w >= 2000:
-        return "1080p"
-    elif w >= 1500:
-        return "720p"
-    elif w >= 1000:
-        return "480p"
-    elif w >= 700:
-        return "360p"
-
-    if h >= 2000:
-        return "2160p"
-    elif h >= 1300:
-        return "1440p"
-    elif h >= 800:
-        return "1080p"
-    elif h >= 600:
-        return "720p"
-    elif h >= 400:
-        return "480p"
-    elif h >= 300:
-        return "360p"
-
-    return f"{h}p"
-
-
 async def process_message(message):
     file_path = None
-
     media = message.video or message.document
     temp = f"tmp_{message.id}.bin"
 
@@ -207,7 +208,7 @@ async def process_message(message):
             await f.write(chunk)
 
     try:
-        duration, width, height, codec, bit_depth, hdr, audio, sub = await get_media_info(temp)
+        duration, width, height, codec, bit_depth, hdr, transfer, audio, sub = await get_media_info(temp)
         if duration == 0 or not width or not height:
             raise Exception()
         file_path = temp
@@ -216,22 +217,22 @@ async def process_message(message):
             os.remove(temp)
 
         file_path = await message.download()
-        duration, width, height, codec, bit_depth, audio, sub = await get_media_info(file_path)
+        duration, width, height, codec, bit_depth, hdr, transfer, audio, sub = await get_media_info(file_path)
 
-    quality = get_quality(width, height) if width and height else "Unknown"
+    quality = get_quality(width, height) or "Unknown"
+    format_info = get_video_format(codec, transfer, hdr, bit_depth)
 
-    video_line = " ".join(filter(None, [quality, codec, bit_depth, hdr])) or "Unknown"
+    video_line = " ".join(filter(None, [quality, format_info])) or "Unknown"
 
     caption = CAPTION_TEMPLATE.format(
         title=message.caption or media.file_name or "Video",
         video_line=video_line,
         duration=format_duration(duration) if duration else "Unknown",
-        audio=audio or "Unknown",
+        audio=audio,
         subtitle=sub
     )
 
     return caption, file_path
-
 
 async def worker():
     while True:
@@ -258,20 +259,16 @@ async def worker():
 
         queue.task_done()
 
-
 @app.on_message(filters.chat(ALLOWED_CHATS) & filters.channel & (filters.video | filters.document))
 async def channel_handler(_, message):
     await queue.put((message, "channel"))
-
 
 @app.on_message(filters.private & (filters.video | filters.document))
 async def private_handler(_, message):
     if not queue.empty():
         await message.reply_text("⚠️ Please send one file at a time.")
         return
-
     await queue.put((message, "private"))
-
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(_, m):
@@ -295,7 +292,6 @@ async def server(_, m):
     await m.reply_text(
         f"CPU: {psutil.cpu_percent()}%\nRAM: {psutil.virtual_memory().percent}%\nDisk: {psutil.disk_usage('/').percent}%"
     )
-
 
 @app.on_message(filters.command("restart") & filters.user(ADMIN_ID))
 async def restart(_, m):
@@ -322,6 +318,45 @@ async def update(_, m):
     except Exception as e:
         await m.reply_text(f"Update failed: {e}")
 
+@app.on_message(filters.command("info") & filters.reply)
+async def info_command(_, message):
+    reply = message.reply_to_message
+
+    if not (reply.video or reply.document):
+        return await message.reply_text("⚠️ Reply to a video or file.")
+
+    temp_path = f"info_{reply.id}.bin"
+
+    try:
+        media = reply.video or reply.document
+
+        async with aiopen(temp_path, "wb") as f:
+            async for chunk in app.stream_media(media, limit=STREAM_LIMIT):
+                await f.write(chunk)
+
+        duration, width, height, codec, bit_depth, hdr, audio, sub = await get_media_info(temp_path)
+
+        quality = get_quality(width, height) if width and height else "Unknown"
+
+        video_line = " ".join(filter(None, [quality, codec, bit_depth, hdr])) or "Unknown"
+
+        text = (
+            f"<b>📊 Media Info</b>\n\n"
+            f"🎬 <b>Video:</b> {video_line}\n"
+            f"⏳ <b>Duration:</b> {format_duration(duration) if duration else 'Unknown'}\n"
+            f"🔊 <b>Audio:</b> {audio}\n"
+            f"💬 <b>Subtitles:</b> {sub}"
+        )
+
+        await message.reply_text(text, parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        await message.reply_text(f"❌ Failed to extract info\n\n<code>{e}</code>")
+
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
 
 async def main():
 
@@ -338,7 +373,6 @@ async def main():
     scheduler.start()
 
     await asyncio.Event().wait()
-
 
 if __name__ == "__main__":
     app.run(main())

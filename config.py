@@ -15,7 +15,7 @@ LOG_FORMAT = os.environ.get(
 )
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
-STREAM_LIMIT = int(os.environ.get("STREAM_LIMIT", 5))
+STREAM_LIMIT = int(os.environ.get("STREAM_LIMIT", 17))
 
 CAPTION_TEMPLATE = os.environ.get(
     "CAPTION_TEMPLATE",
