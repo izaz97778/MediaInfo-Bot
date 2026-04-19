@@ -5,18 +5,24 @@ import os
 import logging
 import sys
 import psutil
+import gc
 import re
+import uuid
 from aiofiles import open as aiopen
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from functools import lru_cache
 from typing import Optional
-
+from aiofiles.os import remove as aioremove
+from pyrogram.errors import MessageNotModified
+from collections import defaultdict
+from pyrogram.errors import FloodWait
 from config import (
     API_ID, API_HASH, BOT_TOKEN,
     ADMIN_ID, ALLOWED_CHATS,
     LOG_FORMAT, LOG_LEVEL,
-    STREAM_LIMIT,
+    GC_THRESHOLD,
     CAPTION_TEMPLATE,
 )
 
@@ -25,41 +31,87 @@ logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
-app = Client("MediaInfo-Bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=10)
+app = Client("MyMediaInfoRoBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=4)
 
-queue = asyncio.Queue()
-processing_lock = asyncio.Lock()
+scheduler = AsyncIOScheduler()
+stream_semaphore = asyncio.Semaphore(2)
+active_users = set()
+_last_edit = {}
+channel_queues = defaultdict(list)
+channel_locks = defaultdict(asyncio.Lock)
+last_edit_time = {}
+
+EDIT_DELAY = 2.5
+
+async def safe_edit(msg, text, delay=1.5, parse_mode=None):
+    if not msg:
+        return
+
+    key = msg.id
+    now = asyncio.get_event_loop().time()
+
+    if key in _last_edit and now - _last_edit[key] < delay:
+        return
+
+    try:
+        await msg.edit_text(text, parse_mode=parse_mode)
+        _last_edit[key] = now
+    except MessageNotModified:
+        pass
+    except Exception:
+        pass
+
+async def api_delay():
+    await asyncio.sleep(0.4)
 
 _LANGUAGE_MAP = {
-    'en': 'English','eng': 'English',
-    'hi': 'Hindi','hin': 'Hindi',
-    'ta': 'Tamil','tam': 'Tamil',
-    'te': 'Telugu','tel': 'Telugu',
-    'ml': 'Malayalam','mal': 'Malayalam',
-    'kn': 'Kannada','kan': 'Kannada',
-    'bn': 'Bengali','ben': 'Bengali',
-    'mr': 'Marathi','mar': 'Marathi',
-    'gu': 'Gujarati','guj': 'Gujarati',
-    'pa': 'Punjabi','pun': 'Punjabi',
+    'en': 'English',  'eng': 'English',
+    'hi': 'Hindi',   'hin': 'Hindi',
+    'ta': 'Tamil',   'tam': 'Tamil',
+    'te': 'Telugu',  'tel': 'Telugu',
+    'ml': 'Malayalam', 'mal': 'Malayalam',
+    'kn': 'Kannada', 'kan': 'Kannada',
+    'bn': 'Bengali', 'ben': 'Bengali',
+    'mr': 'Marathi', 'mar': 'Marathi',
+    'gu': 'Gujarati', 'guj': 'Gujarati',
+    'pa': 'Punjabi', 'pun': 'Punjabi',
     'bho': 'Bhojpuri',
-    'zh': 'Chinese','chi': 'Chinese','cmn': 'Chinese',
-    'ko': 'Korean','kor': 'Korean',
-    'pt': 'Portuguese','por': 'Portuguese',
-    'th': 'Thai','tha': 'Thai',
-    'tl': 'Tagalog','tgl': 'Tagalog','fil': 'Tagalog',
-    'ja': 'Japanese','jpn': 'Japanese',
-    'es': 'Spanish','spa': 'Spanish',
-    'fr': 'French','fra': 'French','fre': 'French',
-    'de': 'German','deu': 'German','ger': 'German',
-    'it': 'Italian','ita': 'Italian',
-    'ru': 'Russian','rus': 'Russian',
-    'ar': 'Arabic','ara': 'Arabic',
-    'tr': 'Turkish','tur': 'Turkish',
-    'nl': 'Dutch','nld': 'Dutch',
-    'pl': 'Polish','pol': 'Polish',
-    'vi': 'Vietnamese','vie': 'Vietnamese',
-    'id': 'Indonesian','ind': 'Indonesian',
-    'unknown': 'Original', 'und': 'Original'
+    'zh': 'Chinese', 'chi': 'Chinese', 'cmn': 'Chinese',
+    'ko': 'Korean',  'kor': 'Korean',
+    'pt': 'Portuguese', 'por': 'Portuguese',
+    'th': 'Thai',    'tha': 'Thai',
+    'tl': 'Tagalog', 'tgl': 'Tagalog', 'fil': 'Tagalog',
+    'ja': 'Japanese', 'jpn': 'Japanese',
+    'es': 'Spanish', 'spa': 'Spanish',
+    'sv': 'Swedish', 'swe': 'Swedish',
+    'fr': 'French', 'fra': 'French', 'fre': 'French',
+    'de': 'German', 'deu': 'German', 'ger': 'German',
+    'it': 'Italian', 'ita': 'Italian',
+    'ru': 'Russian', 'rus': 'Russian',
+    'ar': 'Arabic', 'ara': 'Arabic',
+    'tr': 'Turkish', 'tur': 'Turkish',
+    'nl': 'Dutch', 'nld': 'Dutch', 'dut': 'Dutch',
+    'pl': 'Polish', 'pol': 'Polish',
+    'vi': 'Vietnamese', 'vie': 'Vietnamese',
+    'id': 'Indonesian', 'ind': 'Indonesian',
+    'ms': 'Malay', 'msa': 'Malay', 'may': 'Malay',
+    'fa': 'Persian', 'fas': 'Persian', 'per': 'Persian',
+    'ur': 'Urdu', 'urd': 'Urdu',
+    'he': 'Hebrew', 'heb': 'Hebrew',
+    'el': 'Greek', 'ell': 'Greek', 'gre': 'Greek',
+    'hu': 'Hungarian', 'hun': 'Hungarian',
+    'cs': 'Czech', 'ces': 'Czech', 'cze': 'Czech',
+    'ro': 'Romanian', 'ron': 'Romanian', 'rum': 'Romanian',
+    'da': 'Danish', 'dan': 'Danish',
+    'fi': 'Finnish', 'fin': 'Finnish',
+    'no': 'Norwegian', 'nor': 'Norwegian',
+    'uk': 'Ukrainian', 'ukr': 'Ukrainian',
+    'ca': 'Catalan', 'cat': 'Catalan',
+    'hr': 'Croatian', 'hrv': 'Croatian',
+    'sk': 'Slovak', 'slk': 'Slovak', 'slo': 'Slovak',
+    'sr': 'Serbian', 'srp': 'Serbian',
+    'bg': 'Bulgarian', 'bul': 'Bulgarian',
+    'unknown': 'Unknown'
 }
 
 @lru_cache(maxsize=256)
@@ -168,28 +220,76 @@ def install_ffmpeg():
         subprocess.run(["apt", "update", "-y"])
         subprocess.run(["apt", "install", "-y", "ffmpeg"])
 
+def install_mediainfo():
+    try:
+        subprocess.run(["mediainfo", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        subprocess.run(["apt", "update", "-y"])
+        subprocess.run(["apt", "install", "-y", "mediainfo"])
+
+def run_gc():
+    gc.collect()
+
+def parse_int(value):
+    try:
+        return int(re.findall(r"\d+", str(value))[0])
+    except:
+        return 0
+
+def parse_duration(value):
+    try:
+        if not value:
+            return 0
+
+        value = str(value).strip()
+
+        if value.replace('.', '').isdigit():
+            val = float(value)
+            return val / 1000 if val > 10000 else val
+
+        if ":" in value:
+            parts = value.split(":")
+            parts = [float(p) for p in parts]
+
+            if len(parts) == 3:
+                return parts[0]*3600 + parts[1]*60 + parts[2]
+            elif len(parts) == 2:
+                return parts[0]*60 + parts[1]
+
+        return 0
+
+    except:
+        return 0
 
 async def get_media_info(file_path):
-    cmd = [
-        "ffprobe",
-        "-loglevel", "quiet",
-        "-print_format", "json",
-        "-show_streams",
-        "-show_format",
-        file_path
-    ]
+    cmd = f'mediainfo --ParseSpeed=0 --Language=raw --Output=JSON "{file_path}"'
 
-    process = await asyncio.to_thread(
-        subprocess.run,
-        cmd,
-        stdout=subprocess.PIPE,
-        timeout=15,
-        check=False
-    )
+    try:
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
 
-    data = json.loads(process.stdout.decode("utf-8", errors="ignore"))
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return (0, None, None, None, "", "", "", "Unknown", "Unknown")
 
-    duration = float(data.get("format", {}).get("duration", 0))
+        try:
+            data = json.loads(stdout.decode() or "{}")
+        except:
+            data = {}
+
+    except Exception as e:
+        logger.error(f"MediaInfo error: {e}")
+        return (0, None, None, None, "", "", "", "Unknown", "Unknown")
+
+    tracks = data.get("media", {}).get("track", [])
+
+    duration = 0
     width = height = None
     codec = None
     bit_depth = ""
@@ -199,69 +299,43 @@ async def get_media_info(file_path):
     audio_languages = set()
     subtitle_languages = set()
 
-    streams = data.get("streams", [])
+    for track in tracks:
+        t = track.get("@type", "").lower()
 
-    tracks = []
-    for s in streams:
-        tracks.append({
-            "@type": (s.get("codec_type") or "").lower(),
-            "Format": s.get("codec_name"),
-            "CodecID": s.get("codec_tag_string"),
-            "Title": (s.get("tags", {}) or {}).get("title", ""),
-            "MenuID": "",
-            "Format_Info": "",
-            "Encoding": (s.get("tags", {}) or {}).get("encoding", "")
-        })
+        if t == "video":
+            width = parse_int(track.get("Width"))
+            height = parse_int(track.get("Height"))
+            codec = (track.get("Format") or "").lower()
 
-    has_sub = has_subtitles(tracks)
+            bit_depth = track.get("BitDepth", "")
+            transfer = (track.get("transfer_characteristics") or "").lower()
 
-    for stream in streams:
+            if duration == 0:
+                duration = parse_duration(track.get("Duration"))
 
-        if stream.get("codec_type") == "video" and height is None:
-            width = stream.get("width") or stream.get("coded_width")
-            height = stream.get("height") or stream.get("coded_height")
-
-            codec = (stream.get("codec_name") or "").lower()
-
-            pix_fmt = (stream.get("pix_fmt") or "").lower()
-            profile = (stream.get("profile") or "").lower()
-            bits_per_raw = stream.get("bits_per_raw_sample")
-
-            if bits_per_raw:
-                bit_depth = str(bits_per_raw)
-            elif any(x in pix_fmt for x in ["p10", "10", "yuv420p10", "yuv422p10", "yuv444p10"]):
-                bit_depth = "10"
-            elif any(x in pix_fmt for x in ["p12", "12"]):
-                bit_depth = "12"
-            elif any(x in pix_fmt for x in ["yuv420p", "yuv422p", "yuv444p"]):
-                bit_depth = "8"
-            else:
-                bit_depth = ""
-
-            transfer = (stream.get("color_transfer") or "").lower()
-            color_space = (stream.get("color_space") or "").lower()
-            color_primaries = (stream.get("color_primaries") or "").lower()
-
-            if any(x in transfer for x in ["smpte2084", "arib-std-b67", "pq", "hlg"]) \
-               or "bt2020" in color_space \
-               or "bt2020" in color_primaries:
+            if "hdr" in str(track).lower():
                 hdr = "HDR"
-
-            if "dolby" in profile:
+            if "dolby" in str(track).lower():
                 hdr = "Dolby Vision"
 
-        elif stream.get("codec_type") == "audio":
-            lang = stream.get("tags", {}).get("language", "unknown")
+        elif t == "audio":
+            lang = track.get("Language", "unknown")
             audio_languages.add(get_full_language_name(lang))
 
-        elif stream.get("codec_type") == "subtitle":
-            lang = stream.get("tags", {}).get("language", "unknown")
+        elif t in ["text", "menu", "subtitle"]:
+            lang = track.get("Language", "unknown")
             subtitle_languages.add(get_full_language_name(lang))
+
+    if duration == 0:
+        for track in tracks:
+            if track.get("@type", "").lower() == "general":
+                duration = parse_duration(track.get("Duration"))
+                if duration > 0:
+                    break
 
     subtitle_text = (
         ", ".join(sorted(subtitle_languages))
-        if subtitle_languages
-        else ("Unknown Subtitles" if has_sub else "No Sub")
+        if subtitle_languages else "No Sub"
     )
 
     return (
@@ -280,67 +354,115 @@ def format_duration(s):
     s = int(s)
     return f"{s//3600:02}:{(s%3600)//60:02}:{s%60:02}"
 
-async def process_message(message):
-    file_path = None
+async def process_message(message, progress_msg=None):
     media = message.video or message.document
-    temp = f"tmp_{message.id}.bin"
 
-    async with aiopen(temp, "wb") as f:
-        async for chunk in app.stream_media(media, limit=STREAM_LIMIT):
-            await f.write(chunk)
+    MAX_RETRIES = 1
+    retry_count = 0
+
+    if progress_msg:
+        await api_delay()
+        await safe_edit(progress_msg, "⚡ Fast scan...")
+
+    while retry_count <= MAX_RETRIES:
+        temp_file = f"probe_16KB_{message.id}_{uuid.uuid4().hex}.bin"
+
+        try:
+            target_size = 65536
+
+            async with stream_semaphore:
+                async with aiopen(temp_file, "wb") as f:
+                    async for chunk in app.stream_media(media, limit=1):
+                        if not chunk:
+                            break
+                        await f.write(chunk[:target_size])
+                        break
+
+            await asyncio.sleep(1)
+
+            if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
+                retry_count += 1
+                await asyncio.sleep(1)
+                continue
+
+            result = await get_media_info(temp_file)
+            duration, width, height = result[:3]
+
+            if width and height and duration > 0:
+                return build_caption(message, media, result), None
+
+        except Exception as e:
+            logger.warning(f"16KB attempt failed: {e}")
+            retry_count += 1
+            await asyncio.sleep(1)
+
+        finally:
+            if os.path.exists(temp_file):
+                await aioremove(temp_file)
+
+    steps = [
+        ("256KB", 262144),
+    ]
+
+    for label, target_size in steps:
+        if progress_msg:
+            await api_delay()
+            await safe_edit(progress_msg, f"📦 Scanning {label}...")
+
+        temp_file = f"probe_{label}_{message.id}_{uuid.uuid4().hex}.bin"
+
+        try:
+            written = 0
+
+            async with stream_semaphore:
+                async with aiopen(temp_file, "wb") as f:
+                    async for chunk in app.stream_media(media, limit=1):
+                        if not chunk:
+                            break
+
+                        remaining = target_size - written
+                        if remaining <= 0:
+                            break
+
+                        to_write = chunk[:remaining]
+                        await f.write(to_write)
+                        written += len(to_write)
+
+                        if written >= target_size:
+                            break
+
+            await asyncio.sleep(1)
+
+            if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
+                continue
+
+            result = await get_media_info(temp_file)
+            duration, width, height = result[:3]
+
+            if width and height and duration > 0:
+                return build_caption(message, media, result), None
+
+        except Exception as e:
+            logger.warning(f"{label} fallback failed: {e}")
+
+        finally:
+            if os.path.exists(temp_file):
+                await aioremove(temp_file)
 
     try:
-        duration, width, height, codec, bit_depth, hdr, transfer, audio, sub = await get_media_info(temp)
-        if duration == 0 or not width or not height:
-            raise Exception()
-        file_path = temp
-    except:
-        if os.path.exists(temp):
-            os.remove(temp)
+        if progress_msg:
+            await api_delay()
+            await safe_edit(progress_msg, "⬇️ Downloading (final fallback)...")
 
-        file_path = await message.download()
-        duration, width, height, codec, bit_depth, hdr, transfer, audio, sub = await get_media_info(file_path)
+        file_path = await asyncio.wait_for(message.download(), timeout=30)
+        result = await get_media_info(file_path)
 
-    quality = get_quality(width, height) or "Unknown"
-    format_info = get_video_format(codec, transfer, hdr, bit_depth)
+        return build_caption(message, media, result), file_path
 
-    video_line = " ".join(filter(None, [quality, format_info])) or "Unknown"
-
-    caption = CAPTION_TEMPLATE.format(
-        title=message.caption or media.file_name or "Video",
-        video_line=video_line,
-        duration=format_duration(duration) if duration else "Unknown",
-        audio=audio,
-        subtitle=sub
-    )
-
-    return caption, file_path
-
-async def worker():
-    while True:
-        message, mode = await queue.get()
-        file_path = None
-
-        async with processing_lock:
-            try:
-                caption, file_path = await process_message(message)
-
-                if mode == "channel":
-                    await message.edit_caption(caption, parse_mode=ParseMode.HTML)
-                else:
-                    await message.reply_text(caption, parse_mode=ParseMode.HTML)
-
-                await asyncio.sleep(1)
-
-            except Exception as e:
-                logger.error(e)
-
-            finally:
-                if file_path and os.path.exists(file_path):
-                    os.remove(file_path)
-
-        queue.task_done()
-
+    except asyncio.TimeoutError:
+        logger.error("Full download timeout")
+        return "❌ Could not extract media info (file too large)", None
+        
 def caption_has_media_info(caption: str) -> bool:
     if not caption:
         return False
@@ -354,20 +476,89 @@ def caption_has_media_info(caption: str) -> bool:
 
     return sum(matches) >= 2
 
+async def handle_private(message):
+    file_path = None
+    progress_msg = None
+    user_id = message.from_user.id
+
+    try:
+        await api_delay()
+        progress_msg = await message.reply_text("⏳ Processing...")
+
+        caption, file_path = await process_message(message, progress_msg)
+
+        try:
+            await safe_edit(progress_msg, caption, parse_mode=ParseMode.HTML)
+        except MessageNotModified:
+            pass
+
+    except Exception as e:
+        logger.error(e)
+
+    finally:
+        active_users.discard(user_id)
+
+        if file_path and os.path.exists(file_path):
+            await aioremove(file_path)
+
+async def process_channel_queue(channel_id):
+    async with channel_locks[channel_id]:
+
+        while channel_queues[channel_id]:
+            message, caption = channel_queues[channel_id].pop(0)
+
+            try:
+                now = asyncio.get_event_loop().time()
+                last = last_edit_time.get(channel_id, 0)
+
+                if now - last < EDIT_DELAY:
+                    await asyncio.sleep(EDIT_DELAY - (now - last))
+
+                await message.edit_caption(caption, parse_mode=ParseMode.HTML)
+
+                last_edit_time[channel_id] = asyncio.get_event_loop().time()
+
+            except FloodWait as e:
+                logger.warning(f"FloodWait: sleeping {e.value}s")
+                await asyncio.sleep(e.value)
+
+                try:
+                    await message.edit_caption(caption, parse_mode=ParseMode.HTML)
+                    last_edit_time[channel_id] = asyncio.get_event_loop().time()
+                except Exception as err:
+                    logger.error(f"Retry failed: {err}")
+
+            except Exception as e:
+                logger.error(f"Edit failed: {e}")
+
 @app.on_message(filters.chat(ALLOWED_CHATS) & filters.channel & (filters.video | filters.document))
 async def channel_handler(_, message):
 
     if caption_has_media_info(message.caption or ""):
         return
 
-    await queue.put((message, "channel"))
+    caption, file_path = await process_message(message)
 
+    channel_id = message.chat.id
+
+    channel_queues[channel_id].append((message, caption))
+
+    asyncio.create_task(process_channel_queue(channel_id))
+
+    if file_path and os.path.exists(file_path):
+        await aioremove(file_path)
+        
 @app.on_message(filters.private & (filters.video | filters.document))
 async def private_handler(_, message):
-    if not queue.empty():
-        await message.reply_text("⚠️ Please send one file at a time.")
+
+    user_id = message.from_user.id
+
+    if user_id in active_users:
+        await message.reply_text("⚠️ Please wait until your previous file is processed.")
         return
-    await queue.put((message, "private"))
+
+    active_users.add(user_id)
+    asyncio.create_task(handle_private(message))
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(_, m):
@@ -418,6 +609,24 @@ async def update(_, m):
     except Exception as e:
         await m.reply_text(f"Update failed: {e}")
 
+def build_caption(message, media, result):
+    duration, width, height, codec, bit_depth, hdr, transfer, audio, sub = result
+
+    quality = get_quality(width, height) or "Unknown"
+    format_info = get_video_format(codec, transfer, hdr, bit_depth)
+
+    video_line = " ".join(filter(None, [quality, format_info])) or "Unknown"
+
+    caption = CAPTION_TEMPLATE.format(
+        title=message.caption or media.file_name or "Video",
+        video_line=video_line,
+        duration=format_duration(duration) if duration else "Unknown",
+        audio=audio,
+        subtitle=sub
+    )
+
+    return caption
+
 @app.on_message(filters.command("info") & filters.reply)
 async def info_command(_, message):
     reply = message.reply_to_message
@@ -425,43 +634,43 @@ async def info_command(_, message):
     if not (reply.video or reply.document):
         return await message.reply_text("⚠️ Reply to a video or file.")
 
-    temp_path = f"info_{reply.id}.bin"
+    media = reply.video or reply.document
+    temp = f"info_{reply.id}.bin"
 
     try:
-        media = reply.video or reply.document
+        async with stream_semaphore:
+            async with aiopen(temp, "wb") as f:
+                async for chunk in app.stream_media(media, limit=8):
+                    await f.write(chunk)
 
-        async with aiopen(temp_path, "wb") as f:
-            async for chunk in app.stream_media(media, limit=STREAM_LIMIT):
-                await f.write(chunk)
+        await asyncio.sleep(1)
 
-        duration, width, height, codec, bit_depth, hdr, transfer, audio, sub = await get_media_info(temp_path)
+        result = await get_media_info(temp)
+        duration, width, height = result[:3]
 
-        quality = get_quality(width, height) if width and height else "Unknown"
+        if not (duration > 0 and width and height):
+            if os.path.exists(temp):
+                os.remove(temp)
 
-        format_info = get_video_format(codec, transfer, hdr, bit_depth)
-        video_line = " ".join(filter(None, [quality, format_info])) or "Unknown"
+            temp = await reply.download()
+            result = await get_media_info(temp)
 
-        text = (
-            f"<b>📊 Media Info</b>\n\n"
-            f"🎬 <b>Video:</b> {video_line}\n"
-            f"⏳ <b>Duration:</b> {format_duration(duration) if duration else 'Unknown'}\n"
-            f"🔊 <b>Audio:</b> {audio}\n"
-            f"💬 <b>Subtitles:</b> {sub}"
-        )
+        caption = build_caption(reply, media, result)
 
-        await message.reply_text(text, parse_mode=ParseMode.HTML)
+        await message.reply_text(caption, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         await message.reply_text(f"❌ Failed to extract info\n\n<code>{e}</code>")
 
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
+        if temp and os.path.exists(temp):
+            os.remove(temp)
 
 async def main():
+    gc.set_threshold(*GC_THRESHOLD)
 
     install_ffmpeg()
+    install_mediainfo()
     await app.start()
 
     me = await app.get_me()
@@ -469,8 +678,7 @@ async def main():
 
     await app.send_message(ADMIN_ID, "🚀 Bot Started")
 
-    asyncio.create_task(worker())
-
+    scheduler.add_job(run_gc, "interval", minutes=10)
     scheduler.start()
 
     await asyncio.Event().wait()
