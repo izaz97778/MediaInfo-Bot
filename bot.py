@@ -47,7 +47,7 @@ _last_edit:      dict[int, float] = {}
 channel_queues:  dict[int, list]  = defaultdict(list)
 channel_locks:   dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 last_edit_time:  dict[int, float] = {}
-EDIT_DELAY = 3
+EDIT_DELAY = 3.5
 
 scheduler = AsyncIOScheduler()
 
@@ -547,6 +547,7 @@ async def _safe_edit(msg, text: str, parse_mode=None):
 
 
 async def _process_channel_queue(channel_id: int):
+    global EDIT_DELAY
     async with channel_locks[channel_id]:
         while channel_queues[channel_id]:
             message, caption = channel_queues[channel_id].pop(0)
