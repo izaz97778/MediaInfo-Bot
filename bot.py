@@ -9,6 +9,7 @@ import gc
 import re
 import uuid
 import time
+from motor.motor_asyncio import AsyncIOMotorClient # Added for DB
 from aiohttp import web  # Added for Health Check
 from aiofiles import open as aiopen
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -25,11 +26,30 @@ from config import (
     LOG_FORMAT, LOG_LEVEL,
     GC_THRESHOLD,
     CAPTION_TEMPLATE,
+    MONGO_URI, # Ensure this is in your config.py
 )
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, force=True)
 logging.getLogger("pyrogram").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
+
+# --- DATABASE SETUP ---
+db_client = AsyncIOMotorClient(MONGO_URI)
+db = db_client["MediaInfo-Bot"]
+last_id_collection = db["last_processed_id"]
+
+async def get_last_id(chat_id: int) -> int:
+    """Retrieve the last processed ID for a specific chat."""
+    data = await last_id_collection.find_one({"chat_id": chat_id})
+    return data["last_id"] if data else 1
+
+async def save_last_id(chat_id: int, last_id: int):
+    """Save the current message ID as the last processed."""
+    await last_id_collection.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"last_id": last_id}},
+        upsert=True
+    )
 
 app = Client(
     "MediaInfo-Bot",
@@ -559,12 +579,15 @@ async def _process_channel_queue(channel_id: int):
             try:
                 await message.edit_caption(caption, parse_mode=ParseMode.HTML)
                 last_edit_time[channel_id] = asyncio.get_event_loop().time()
+                # SAVE TO DB
+                await save_last_id(channel_id, message.id)
             except FloodWait as e:
                 EDIT_DELAY = max(EDIT_DELAY, e.value / 10 + 1)
                 await asyncio.sleep(e.value)
                 try:
                     await message.edit_caption(caption, parse_mode=ParseMode.HTML)
                     last_edit_time[channel_id] = asyncio.get_event_loop().time()
+                    await save_last_id(channel_id, message.id)
                 except Exception as err:
                     logger.error(f"Retry edit failed: {err}")
             except Exception as e:
@@ -723,6 +746,17 @@ async def start_health_server():
     await site.start()
     logger.info(f"Koyeb Health Check server active on port {port}")
 
+# --- RESUME LOGIC ---
+async def resume_task():
+    """Fetches missed messages for all 10 chats on startup."""
+    for chat_id in ALLOWED_CHATS:
+        last_id = await get_last_id(chat_id)
+        logger.info(f"Resuming chat {chat_id} from message {last_id}")
+        async for message in app.get_chat_history(chat_id, offset_id=last_id, reverse=True):
+            if (message.video or message.document) and not caption_has_media_info(message.caption or ''):
+                await channel_handler(app, message)
+                await asyncio.sleep(2) # Flood protection
+
 async def main():
     gc.set_threshold(*GC_THRESHOLD)
     _install_deps()
@@ -735,9 +769,12 @@ async def main():
     logger.info(f"@{me.username} started")
     
     try:
-        await app.send_message(ADMIN_ID, "🚀 Bot Started & Health Check Online")
+        await app.send_message(ADMIN_ID, "🚀 Bot Started, DB Connected & Resuming Missed Tasks")
     except Exception:
         pass
+
+    # Start Resume Task
+    asyncio.create_task(resume_task())
 
     scheduler.add_job(gc.collect, "interval", minutes=20)
     scheduler.start()
