@@ -1,5 +1,6 @@
 aiohttp
 aiofiles==23.2.1
+motor
 TgCrypto
 pyrofork==2.3.45
 apscheduler
