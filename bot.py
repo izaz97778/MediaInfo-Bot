@@ -37,6 +37,24 @@ logger = logging.getLogger(__name__)
 db_client = AsyncIOMotorClient(MONGO_URI)
 db = db_client["MediaInfo-Bot"]
 last_id_collection = db["last_processed_id"]
+settings_collection = db["settings"] # For Dynamic Allowed Chats
+
+# --- DYNAMIC CHAT MANAGEMENT ---
+authorized_chats = set(ALLOWED_CHATS)
+
+async def sync_chats():
+    """Syncs the authorized_chats set with MongoDB on startup."""
+    global authorized_chats
+    data = await settings_collection.find_one({"_id": "allowed_chats"})
+    if data:
+        authorized_chats = set(data["chat_ids"])
+    else:
+        # Initial sync: Save chats from config to DB if DB is empty
+        await settings_collection.update_one(
+            {"_id": "allowed_chats"},
+            {"$set": {"chat_ids": list(authorized_chats)}},
+            upsert=True
+        )
 
 async def get_last_id(chat_id: int) -> int:
     """Retrieve the last processed ID for a specific chat."""
@@ -595,10 +613,11 @@ async def _process_channel_queue(channel_id: int):
 
 
 @app.on_message(
-    filters.chat(ALLOWED_CHATS) & filters.channel &
-    (filters.video | filters.document)
+    filters.channel & (filters.video | filters.document)
 )
 async def channel_handler(_, message):
+    if message.chat.id not in authorized_chats:
+        return
     if caption_has_media_info(message.caption or ''):
         return
 
@@ -666,6 +685,49 @@ async def info_command(_, message):
     finally:
         if os.path.exists(tmp):
             await aioremove(tmp)
+
+# --- NEW ADMIN COMMANDS ---
+
+@app.on_message(filters.command("add") & filters.user(ADMIN_ID))
+async def add_chat(_, message):
+    try:
+        if len(message.command) < 2:
+            return await message.reply_text("❌ Usage: `/add -100123456789`")
+        
+        new_id = int(message.command[1])
+        authorized_chats.add(new_id)
+        await settings_collection.update_one(
+            {"_id": "allowed_chats"},
+            {"$addToSet": {"chat_ids": new_id}},
+            upsert=True
+        )
+        await message.reply_text(f"✅ Added {new_id} to authorized chats.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")
+
+@app.on_message(filters.command("remove") & filters.user(ADMIN_ID))
+async def remove_chat(_, message):
+    try:
+        if len(message.command) < 2:
+            return await message.reply_text("❌ Usage: `/remove -100123456789`")
+        
+        target_id = int(message.command[1])
+        if target_id in authorized_chats:
+            authorized_chats.remove(target_id)
+            await settings_collection.update_one(
+                {"_id": "allowed_chats"},
+                {"$pull": {"chat_ids": target_id}}
+            )
+            await message.reply_text(f"✅ Removed {target_id} from authorized chats.")
+        else:
+            await message.reply_text("❌ Chat ID not found in list.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")
+
+@app.on_message(filters.command("chats") & filters.user(ADMIN_ID))
+async def list_chats(_, message):
+    chat_list = "\n".join([f"<code>{cid}</code>" for cid in authorized_chats])
+    await message.reply_text(f"<b>Allowed Chats:</b>\n{chat_list}", parse_mode=ParseMode.HTML)
 
 
 @app.on_message(filters.command("start") & filters.private)
@@ -753,6 +815,9 @@ async def main():
 
     # Start Health Server
     await start_health_server()
+
+    # Dynamic Chat Sync
+    await sync_chats()
 
     await app.start()
     me = await app.get_me()
