@@ -746,26 +746,6 @@ async def start_health_server():
     await site.start()
     logger.info(f"Koyeb Health Check server active on port {port}")
 
-# --- RESUME LOGIC ---
-# --- RESUME LOGIC ---
-async def resume_task():
-    """Fetches missed messages for all 10 chats on startup."""
-    for chat_id in ALLOWED_CHATS:
-        try:
-            last_id = await get_last_id(chat_id)
-            logger.info(f"Resuming chat {chat_id} from message {last_id}")
-            
-            # Use limit to avoid pulling too many old messages at once
-            async for message in app.get_chat_history(chat_id, offset_id=last_id):
-                if not message or message.id <= last_id:
-                    break # Stop when we reach messages we already processed
-                    
-                if (message.video or message.document) and not caption_has_media_info(message.caption or ''):
-                    await channel_handler(app, message)
-                    await asyncio.sleep(2) # Flood protection
-        except Exception as e:
-            logger.error(f"Error in resume_task for {chat_id}: {e}")
-
 
 async def main():
     gc.set_threshold(*GC_THRESHOLD)
@@ -779,12 +759,9 @@ async def main():
     logger.info(f"@{me.username} started")
     
     try:
-        await app.send_message(ADMIN_ID, "🚀 Bot Started, DB Connected & Resuming Missed Tasks")
+        await app.send_message(ADMIN_ID, "🚀 Bot Started & Health Check Online")
     except Exception:
         pass
-
-    # Start Resume Task
-    asyncio.create_task(resume_task())
 
     scheduler.add_job(gc.collect, "interval", minutes=20)
     scheduler.start()
