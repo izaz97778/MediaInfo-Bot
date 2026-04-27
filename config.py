@@ -6,6 +6,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", ))
 
+# Added MONGO_URI for database persistence and resume feature
+MONGO_URI = os.environ.get("MONGO_URI", "")
+
 _raw = os.environ.get("ALLOWED_CHATS", "")
 ALLOWED_CHATS = [int(x.strip()) for x in _raw.split(",") if x.strip()]
 
