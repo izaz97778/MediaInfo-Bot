@@ -78,15 +78,15 @@ app = Client(
     sleep_threshold=60,
 )
 
-stream_semaphore  = asyncio.Semaphore(1)
-channel_semaphore = asyncio.Semaphore(2)
+stream_semaphore  = asyncio.Semaphore(4)
+channel_semaphore = asyncio.Semaphore(3)
 active_users: set = set()
 
 _last_edit:      dict[int, float] = {}
 channel_queues:  dict[int, list]  = defaultdict(list)
 channel_locks:   dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 last_edit_time:  dict[int, float] = {}
-EDIT_DELAY = 5
+EDIT_DELAY = 3.5
 
 scheduler = AsyncIOScheduler()
 
@@ -481,10 +481,10 @@ def caption_has_media_info(caption: str) -> bool:
     if not caption:
         return False
     hits = (
-        bool(re.search(r'ðŸŽ¬', caption)),
-        bool(re.search(r'â³\s*\d{2}:\d{2}:\d{2}', caption)),
-        bool(re.search(r'ðŸ”Š', caption)),
-        bool(re.search(r'ðŸ’¬', caption)),
+        bool(re.search(r'🎬', caption)),
+        bool(re.search(r'⏳\s*\d{2}:\d{2}:\d{2}', caption)),
+        bool(re.search(r'🔊', caption)),
+        bool(re.search(r'💬', caption)),
     )
     return sum(hits) >= 2
 
@@ -527,12 +527,12 @@ async def process_message(message, progress_msg=None) -> tuple[str, Optional[str
             await _safe_edit(progress_msg, text)
             await asyncio.sleep(0.3)
 
-    await _update("âš¡ Fast scan (16 KB)â€¦")
+    await _update("⚡ Fast scan (16 KB)…")
 
     for label, size in _STREAM_STEPS:
         tmp = f"probe_{label}_{message.id}_{uuid.uuid4().hex[:8]}.bin"
         try:
-            await _update(f"ðŸ“¦ Scanning {label}â€¦")
+            await _update(f"📦 Scanning {label}…")
             ok = await _stream_chunk(media, size, tmp)
             if not ok:
                 continue
@@ -548,7 +548,7 @@ async def process_message(message, progress_msg=None) -> tuple[str, Optional[str
             if os.path.exists(tmp):
                 await aioremove(tmp)
 
-    await _update("â¬‡ï¸ Full download (fallback)â€¦")
+    await _update("⬇️ Full download (fallback)…")
     try:
         file_size = getattr(media, 'file_size', 0) or 0
         if file_size > 2 * 1024 ** 3:
@@ -635,7 +635,7 @@ async def channel_handler(_, message):
 async def private_handler(_, message):
     user_id = message.from_user.id
     if user_id in active_users:
-        await message.reply_text("âš ï¸ Please wait until your current file is processed.")
+        await message.reply_text("⚠️ Please wait until your current file is processed.")
         return
     active_users.add(user_id)
     asyncio.create_task(_handle_private(message))
@@ -646,8 +646,8 @@ async def _handle_private(message):
     progress_msg = None
     user_id = message.from_user.id
     try:
-        await asyncio.sleep(3)
-        progress_msg = await message.reply_text("â³ Processingâ€¦")
+        await asyncio.sleep(0.5)
+        progress_msg = await message.reply_text("⏳ Processing…")
         caption, file_path = await process_message(message, progress_msg)
         try:
             await _safe_edit(progress_msg, caption, parse_mode=ParseMode.HTML)
@@ -665,7 +665,7 @@ async def _handle_private(message):
 async def info_command(_, message):
     reply = message.reply_to_message
     if not (reply and (reply.video or reply.document)):
-        return await message.reply_text("âš ï¸ Reply to a video or document.")
+        return await message.reply_text("⚠️ Reply to a video or document.")
 
     media = reply.video or reply.document
     tmp   = f"info_{reply.id}_{uuid.uuid4().hex[:6]}.bin"
@@ -681,7 +681,7 @@ async def info_command(_, message):
         caption = _build_caption(reply, media, result)
         await message.reply_text(caption, parse_mode=ParseMode.HTML)
     except Exception as e:
-        await message.reply_text(f"âŒ Failed\n\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+        await message.reply_text(f"❌ Failed\n\n<code>{e}</code>", parse_mode=ParseMode.HTML)
     finally:
         if os.path.exists(tmp):
             await aioremove(tmp)
@@ -692,7 +692,7 @@ async def info_command(_, message):
 async def add_chat(_, message):
     try:
         if len(message.command) < 2:
-            return await message.reply_text("âŒ Usage: `/add -100123456789`")
+            return await message.reply_text("❌ Usage: `/add -100123456789`")
         
         new_id = int(message.command[1])
         authorized_chats.add(new_id)
@@ -701,15 +701,15 @@ async def add_chat(_, message):
             {"$addToSet": {"chat_ids": new_id}},
             upsert=True
         )
-        await message.reply_text(f"âœ… Added {new_id} to authorized chats.")
+        await message.reply_text(f"✅ Added {new_id} to authorized chats.")
     except Exception as e:
-        await message.reply_text(f"âŒ Error: {e}")
+        await message.reply_text(f"❌ Error: {e}")
 
 @app.on_message(filters.command("remove") & filters.user(ADMIN_ID))
 async def remove_chat(_, message):
     try:
         if len(message.command) < 2:
-            return await message.reply_text("âŒ Usage: `/remove -100123456789`")
+            return await message.reply_text("❌ Usage: `/remove -100123456789`")
         
         target_id = int(message.command[1])
         if target_id in authorized_chats:
@@ -718,11 +718,11 @@ async def remove_chat(_, message):
                 {"_id": "allowed_chats"},
                 {"$pull": {"chat_ids": target_id}}
             )
-            await message.reply_text(f"âœ… Removed {target_id} from authorized chats.")
+            await message.reply_text(f"✅ Removed {target_id} from authorized chats.")
         else:
-            await message.reply_text("âŒ Chat ID not found in list.")
+            await message.reply_text("❌ Chat ID not found in list.")
     except Exception as e:
-        await message.reply_text(f"âŒ Error: {e}")
+        await message.reply_text(f"❌ Error: {e}")
 
 @app.on_message(filters.command("chats") & filters.user(ADMIN_ID))
 async def list_chats(_, message):
@@ -733,16 +733,16 @@ async def list_chats(_, message):
 @app.on_message(filters.command("start") & filters.private)
 async def start(_, m):
     await m.reply_text(
-        "<b>ðŸŽ¬ Media Info Bot</b>\n\n"
+        "<b>🎬 Media Info Bot</b>\n\n"
         "Send me any video or file and I'll extract detailed media information.\n\n"
         "I provide:\n"
-        "â€¢ ðŸŽž Video quality, codec &amp; bit depth\n"
-        "â€¢ â³ Duration\n"
-        "â€¢ ðŸ”Š Audio languages\n"
-        "â€¢ ðŸ’¬ Subtitle info\n\n"
-        "<b>âš¡ Fast â€¢ Clean â€¢ Accurate</b>\n\n"
-        "ðŸ“Œ <i>Note:</i> Send one file at a time.\n\n"
-        "ðŸ¤– Bot by @piroxbots",
+        "• 🎞 Video quality, codec &amp; bit depth\n"
+        "• ⏳ Duration\n"
+        "• 🔊 Audio languages\n"
+        "• 💬 Subtitle info\n\n"
+        "<b>⚡ Fast • Clean • Accurate</b>\n\n"
+        "📌 <i>Note:</i> Send one file at a time.\n\n"
+        "🤖 Bot by @piroxbots",
         parse_mode=ParseMode.HTML,
     )
 
@@ -758,13 +758,13 @@ async def server_cmd(_, m):
 
 @app.on_message(filters.command("restart") & filters.user(ADMIN_ID))
 async def restart_cmd(_, m):
-    await m.reply_text("Restartingâ€¦")
+    await m.reply_text("Restarting…")
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 @app.on_message(filters.command("shutdown") & filters.user(ADMIN_ID))
 async def shutdown_cmd(_, m):
-    await m.reply_text("Shutting downâ€¦")
+    await m.reply_text("Shutting down…")
     scheduler.shutdown(wait=False)
     await app.stop()
     os._exit(0)
@@ -772,11 +772,11 @@ async def shutdown_cmd(_, m):
 
 @app.on_message(filters.command("update") & filters.user(ADMIN_ID))
 async def update_cmd(_, m):
-    await m.reply_text("Updatingâ€¦")
+    await m.reply_text("Updating…")
     try:
         os.system("git pull")
         os.system("pip install -r requirements.txt --no-cache-dir -q")
-        await m.reply_text("âœ… Updated. Restartingâ€¦")
+        await m.reply_text("✅ Updated. Restarting…")
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
         await m.reply_text(f"Update failed: {e}")
@@ -786,7 +786,7 @@ def _install_deps():
     for binary, pkg in (("ffprobe", "ffmpeg"), ("mediainfo", "mediainfo")):
         r = subprocess.run(["which", binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if r.returncode != 0:
-            logger.info(f"Installing {pkg}â€¦")
+            logger.info(f"Installing {pkg}…")
             subprocess.run(["apt", "update", "-y"], stdout=subprocess.DEVNULL)
             subprocess.run(["apt", "install", "-y", pkg], stdout=subprocess.DEVNULL)
 
@@ -824,7 +824,7 @@ async def main():
     logger.info(f"@{me.username} started")
     
     try:
-        await app.send_message(ADMIN_ID, "ðŸš€ Bot Started & Health Check Online")
+        await app.send_message(ADMIN_ID, "🚀 Bot Started & Health Check Online")
     except Exception:
         pass
 
