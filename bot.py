@@ -78,7 +78,7 @@ app = Client(
     sleep_threshold=60,
 )
 
-# REVISED SEMAPHORES TO PREVENT FLOODING
+# FIXED: Lowered semaphores to prevent auth.ExportAuthorization floods
 stream_semaphore = asyncio.Semaphore(1)
 channel_semaphore = asyncio.Semaphore(2)
 
@@ -88,29 +88,12 @@ channel_queues: dict[int, list] = defaultdict(list)
 channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 last_edit_time: dict[int, float] = {}
 
-# REVISED EDIT DELAY
+# FIXED: Increased delay to be safer against message edit limits
 EDIT_DELAY = 5.0
 scheduler = AsyncIOScheduler()
 
 _LANGUAGE_MAP: dict[str, str] = {
-    'en': 'English', 'eng': 'English', 'hi': 'Hindi', 'hin': 'Hindi', 'ta': 'Tamil', 'tam': 'Tamil',
-    'te': 'Telugu', 'tel': 'Telugu', 'ml': 'Malayalam','mal': 'Malayalam', 'kn': 'Kannada', 'kan': 'Kannada',
-    'bn': 'Bengali', 'ben': 'Bengali', 'mr': 'Marathi', 'mar': 'Marathi', 'gu': 'Gujarati', 'guj': 'Gujarati',
-    'pa': 'Punjabi', 'pun': 'Punjabi', 'bho':'Bhojpuri', 'zh': 'Chinese', 'chi': 'Chinese', 'cmn': 'Chinese',
-    'ko': 'Korean', 'kor': 'Korean', 'pt': 'Portuguese','por': 'Portuguese', 'th': 'Thai', 'tha': 'Thai',
-    'tl': 'Tagalog', 'tgl': 'Tagalog', 'fil': 'Tagalog', 'ja': 'Japanese', 'jpn': 'Japanese', 'es': 'Spanish',
-    'spa': 'Spanish', 'sv': 'Swedish', 'swe': 'Swedish', 'fr': 'French', 'fra': 'French', 'fre': 'French',
-    'de': 'German', 'deu': 'German', 'ger': 'German', 'it': 'Italian', 'ita': 'Italian', 'ru': 'Russian',
-    'rus': 'Russian', 'ar': 'Arabic', 'ara': 'Arabic', 'tr': 'Turkish', 'tur': 'Turkish', 'nl': 'Dutch',
-    'nld': 'Dutch', 'dut': 'Dutch', 'pl': 'Polish', 'pol': 'Polish', 'vi': 'Vietnamese','vie': 'Vietnamese',
-    'id': 'Indonesian','ind': 'Indonesian', 'ms': 'Malay', 'msa': 'Malay', 'may': 'Malay', 'fa': 'Persian',
-    'fas': 'Persian', 'per': 'Persian', 'ur': 'Urdu', 'urd': 'Urdu', 'he': 'Hebrew', 'heb': 'Hebrew',
-    'el': 'Greek', 'ell': 'Greek', 'gre': 'Greek', 'hu': 'Hungarian','hun': 'Hungarian', 'cs': 'Czech',
-    'ces': 'Czech', 'cze': 'Czech', 'ro': 'Romanian', 'ron': 'Romanian', 'rum': 'Romanian', 'da': 'Danish',
-    'dan': 'Danish', 'fi': 'Finnish', 'fin': 'Finnish', 'no': 'Norwegian','nor': 'Norwegian', 'uk': 'Ukrainian',
-    'ukr': 'Ukrainian', 'ca': 'Catalan', 'cat': 'Catalan', 'hr': 'Croatian', 'hrv': 'Croatian', 'sk': 'Slovak',
-    'slk': 'Slovak', 'slo': 'Slovak', 'sr': 'Serbian', 'srp': 'Serbian', 'bg': 'Bulgarian','bul': 'Bulgarian',
-    'unknown': 'Original Audio',
+    'en': 'English', 'eng': 'English', 'hi': 'Hindi', 'hin': 'Hindi', 'ta': 'Tamil', 'tam': 'Tamil', 'te': 'Telugu', 'tel': 'Telugu', 'ml': 'Malayalam','mal': 'Malayalam', 'kn': 'Kannada', 'kan': 'Kannada', 'bn': 'Bengali', 'ben': 'Bengali', 'mr': 'Marathi', 'mar': 'Marathi', 'gu': 'Gujarati', 'guj': 'Gujarati', 'pa': 'Punjabi', 'pun': 'Punjabi', 'bho':'Bhojpuri', 'zh': 'Chinese', 'chi': 'Chinese', 'cmn': 'Chinese', 'ko': 'Korean', 'kor': 'Korean', 'pt': 'Portuguese','por': 'Portuguese', 'th': 'Thai', 'tha': 'Thai', 'tl': 'Tagalog', 'tgl': 'Tagalog', 'fil': 'Tagalog', 'ja': 'Japanese', 'jpn': 'Japanese', 'es': 'Spanish', 'spa': 'Spanish', 'sv': 'Swedish', 'swe': 'Swedish', 'fr': 'French', 'fra': 'French', 'fre': 'French', 'de': 'German', 'deu': 'German', 'ger': 'German', 'it': 'Italian', 'ita': 'Italian', 'ru': 'Russian', 'rus': 'Russian', 'ar': 'Arabic', 'ara': 'Arabic', 'tr': 'Turkish', 'tur': 'Turkish', 'nl': 'Dutch', 'nld': 'Dutch', 'dut': 'Dutch', 'pl': 'Polish', 'pol': 'Polish', 'vi': 'Vietnamese','vie': 'Vietnamese', 'id': 'Indonesian','ind': 'Indonesian', 'ms': 'Malay', 'msa': 'Malay', 'may': 'Malay', 'fa': 'Persian', 'fas': 'Persian', 'per': 'Persian', 'ur': 'Urdu', 'urd': 'Urdu', 'he': 'Hebrew', 'heb': 'Hebrew', 'el': 'Greek', 'ell': 'Greek', 'gre': 'Greek', 'hu': 'Hungarian','hun': 'Hungarian', 'cs': 'Czech', 'ces': 'Czech', 'cze': 'Czech', 'ro': 'Romanian', 'ron': 'Romanian', 'rum': 'Romanian', 'da': 'Danish', 'dan': 'Danish', 'fi': 'Finnish', 'fin': 'Finnish', 'no': 'Norwegian','nor': 'Norwegian', 'uk': 'Ukrainian','ukr': 'Ukrainian', 'ca': 'Catalan', 'cat': 'Catalan', 'hr': 'Croatian', 'hrv': 'Croatian', 'sk': 'Slovak', 'slk': 'Slovak', 'slo': 'Slovak', 'sr': 'Serbian', 'srp': 'Serbian', 'bg': 'Bulgarian','bul': 'Bulgarian', 'unknown': 'Original Audio',
 }
 
 @lru_cache(maxsize=256)
@@ -157,13 +140,7 @@ def _is_video_track(track: dict) -> bool:
     fp = (track.get('Format_Profile','') or '').lower()
     title = (track.get('Title', '') or '').lower()
     menu = str(track.get('MenuID', '') or '').lower()
-    return any([
-        t == 'video',
-        any(x in fmt for x in ('avc','hevc','h.264','h264','h.265','h265','av1','vp9','mpeg-4','mpeg4','xvid')),
-        any(x in cid for x in ('avc','h264','hevc','h265','av1','vp9','mpeg4','xvid','27')),
-        'video' in menu, 'video' in title,
-        any(x in fp for x in ('main','high','baseline')),
-    ])
+    return any([ t == 'video', any(x in fmt for x in ('avc','hevc','h.264','h264','h.265','h265','av1','vp9','mpeg-4','mpeg4','xvid')), any(x in cid for x in ('avc','h264','hevc','h265','av1','vp9','mpeg4','xvid','27')), 'video' in menu, 'video' in title, any(x in fp for x in ('main','high','baseline')), ])
 
 def _has_subtitles(tracks: list) -> bool:
     for track in tracks:
@@ -174,14 +151,7 @@ def _has_subtitles(tracks: list) -> bool:
         enc = (track.get('Encoding', '') or '').lower()
         fi = (track.get('Format_Info', '') or '').lower()
         ttl = (track.get('Title', '') or '').lower()
-        if any([
-            t == 'text',
-            any(x in fmt for x in ('pgs','subrip','ass','ssa','srt','dvb_subtitle','dvd_subtitle')),
-            any(x in cid for x in ('s_text','subp','pgs','subtitle','dvb','dvd')),
-            any(x in enc for x in ('utf-8','utf8','unicode','text')),
-            any(x in fi for x in ('subtitle','caption','text')),
-            'subtitle' in ttl,
-        ]): return True
+        if any([ t == 'text', any(x in fmt for x in ('pgs','subrip','ass','ssa','srt','dvb_subtitle','dvd_subtitle')), any(x in cid for x in ('s_text','subp','pgs','subtitle','dvb','dvd')), any(x in enc for x in ('utf-8','utf8','unicode','text')), any(x in fi for x in ('subtitle','caption','text')), 'subtitle' in ttl, ]): return True
     return False
 
 def _parse_int(value) -> int:
@@ -210,15 +180,9 @@ def _fmt_duration(s: float) -> str:
 
 async def _run_mediainfo(path: str) -> dict:
     try:
-        proc = await asyncio.create_subprocess_shell(
-            f'mediainfo --ParseSpeed=0 --Language=raw --Output=JSON "{path}"',
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-        except asyncio.TimeoutError:
-            proc.kill(); await proc.wait()
-            return {}
+        proc = await asyncio.create_subprocess_shell( f'mediainfo --ParseSpeed=0 --Language=raw --Output=JSON "{path}"', stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, )
+        try: stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+        except asyncio.TimeoutError: proc.kill(); await proc.wait(); return {}
         return json.loads(stdout.decode() or '{}')
     except Exception as e:
         logger.warning(f"mediainfo error: {e}")
@@ -226,10 +190,7 @@ async def _run_mediainfo(path: str) -> dict:
 
 async def _run_ffprobe_full(path: str) -> dict:
     try:
-        proc = await asyncio.create_subprocess_shell(
-            f'ffprobe -v error -show_streams -show_format -of json "{path}"',
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
+        proc = await asyncio.create_subprocess_shell( f'ffprobe -v error -show_streams -show_format -of json "{path}"', stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
         return json.loads(out.decode() or '{}')
     except Exception as e:
@@ -318,7 +279,7 @@ def _parse_tracks(tracks: list) -> tuple:
             lang = track.get('Language') or track.get('Language_String') or 'unknown'
             sub_langs.add(get_full_language_name(lang))
     audio_str = ', '.join(sorted(audio_langs)) if audio_langs else 'Original Audio'
-    sub_str = ', '.join(sorted(sub_langs)) if sub_langs else ('ESUB' if _has_subtitles(tracks) else 'No Esubs')
+    sub_str = ', '.join(sorted(sub_langs)) if sub_langs else ( 'ESUB' if _has_subtitles(tracks) else 'No Esubs')
     return duration, width, height, codec, bit_depth, hdr, transfer, audio_str, sub_str
 
 async def _probe(path: str) -> tuple:
@@ -346,30 +307,16 @@ def _build_caption(message, media, result: tuple) -> str:
     quality = get_standard_resolution(min(w for w in (width, height) if w) if width and height else (height or width or 0))
     fmt = get_video_format(codec, transfer, hdr, bit_depth)
     video_line = ' '.join(filter(None, [quality, fmt])) or 'Unknown'
-    return CAPTION_TEMPLATE.format(
-        title = message.caption or getattr(media, 'file_name', None) or 'Video',
-        video_line= video_line,
-        duration = _fmt_duration(duration) if duration else 'Unknown',
-        audio = audio,
-        subtitle = sub,
-    )
+    return CAPTION_TEMPLATE.format( title = message.caption or getattr(media, 'file_name', None) or 'Video', video_line= video_line, duration = _fmt_duration(duration) if duration else 'Unknown', audio = audio, subtitle = sub, )
 
 def caption_has_media_info(caption: str) -> bool:
     if not caption: return False
-    hits = (
-        bool(re.search(r'🎬', caption)),
-        bool(re.search(r'⏳\s*\d{2}:\d{2}:\d{2}', caption)),
-        bool(re.search(r'🔊', caption)),
-        bool(re.search(r'💬', caption)),
-    )
+    hits = ( bool(re.search(r'🎬', caption)), bool(re.search(r'⏳\s*\d{2}:\d{2}:\d{2}', caption)), bool(re.search(r'🔊', caption)), bool(re.search(r'💬', caption)), )
     return sum(hits) >= 2
 
-_STREAM_STEPS = [
-    ("16KB", 16 * 1024), ("1MB", 1 * 1024 * 1024),
-    ("3MB", 3 * 1024 * 1024), ("8MB", 8 * 1024 * 1024),
-]
+_STREAM_STEPS = [ ("16KB", 16 * 1024), ("1MB", 1 * 1024 * 1024), ("3MB", 3 * 1024 * 1024), ("8MB", 8 * 1024 * 1024), ]
 
-# REVISED STREAM CHUNK WITH FLOOD HANDLING
+# FIXED: Added limit and sleep to prevent flooding during chunk streaming
 async def _stream_chunk(media, size: int, path: str) -> bool:
     try:
         written = 0
@@ -382,10 +329,11 @@ async def _stream_chunk(media, size: int, path: str) -> bool:
                     piece = chunk[:remaining]
                     await f.write(piece)
                     written += len(piece)
+                    await asyncio.sleep(0.1) # Tiny sleep to reduce request storm
                     if written >= size: break
         return os.path.exists(path) and os.path.getsize(path) > 0
     except FloodWait as e:
-        logger.warning(f"FloodWait in stream: waiting {e.value}s")
+        logger.warning(f"FloodWait during stream: {e.value}s")
         await asyncio.sleep(e.value)
         return False
     except Exception as e:
@@ -414,19 +362,15 @@ async def process_message(message, progress_msg=None) -> tuple[str, Optional[str
     await _update("⬇️ Full download (fallback)…")
     try:
         file_size = getattr(media, 'file_size', 0) or 0
-        if file_size > 2 * 1024 ** 3:
-            return message.caption or getattr(media, 'file_name', None) or 'Video', None
-        try:
-            file_path = await asyncio.wait_for(message.download(), timeout=60)
+        if file_size > 2 * 1024 ** 3: return message.caption or getattr(media, 'file_name', None) or 'Video', None
+        try: file_path = await asyncio.wait_for(message.download(), timeout=60)
         except FloodWait as e:
             await asyncio.sleep(e.value)
             file_path = await message.download()
         result = await _probe(file_path)
         return _build_caption(message, media, result), file_path
-    except asyncio.TimeoutError:
-        logger.error("Full download timed out")
-    except Exception as e:
-        logger.error(f"Full download failed: {e}")
+    except asyncio.TimeoutError: logger.error("Full download timed out")
+    except Exception as e: logger.error(f"Full download failed: {e}")
     return message.caption or getattr(media, 'file_name', None) or 'Video', None
 
 async def _safe_edit(msg, text: str, parse_mode=None):
@@ -446,11 +390,11 @@ async def _process_channel_queue(channel_id: int):
             message, caption = channel_queues[channel_id].pop(0)
             now = asyncio.get_event_loop().time()
             last = last_edit_time.get(channel_id, 0)
-            if now - last < EDIT_DELAY:
-                await asyncio.sleep(EDIT_DELAY - (now - last))
+            if now - last < EDIT_DELAY: await asyncio.sleep(EDIT_DELAY - (now - last))
             try:
                 await message.edit_caption(caption, parse_mode=ParseMode.HTML)
                 last_edit_time[channel_id] = asyncio.get_event_loop().time()
+                # SAVE TO DB
                 await save_last_id(channel_id, message.id)
             except FloodWait as e:
                 EDIT_DELAY = max(EDIT_DELAY, e.value / 10 + 1)
@@ -462,7 +406,7 @@ async def _process_channel_queue(channel_id: int):
                 except Exception as err: logger.error(f"Retry edit failed: {err}")
             except Exception as e: logger.error(f"Edit failed: {e}")
 
-@app.on_message(filters.channel & (filters.video | filters.document))
+@app.on_message( filters.channel & (filters.video | filters.document) )
 async def channel_handler(_, message):
     if message.chat.id not in authorized_chats: return
     if caption_has_media_info(message.caption or ''): return
@@ -499,8 +443,7 @@ async def _handle_private(message):
 @app.on_message(filters.command("info") & filters.reply)
 async def info_command(_, message):
     reply = message.reply_to_message
-    if not (reply and (reply.video or reply.document)):
-        return await message.reply_text("⚠️ Reply to a video or document.")
+    if not (reply and (reply.video or reply.document)): return await message.reply_text("⚠️ Reply to a video or document.")
     media = reply.video or reply.document
     tmp = f"info_{reply.id}_{uuid.uuid4().hex[:6]}.bin"
     try:
@@ -513,8 +456,7 @@ async def info_command(_, message):
             result = await _probe(tmp)
         caption = _build_caption(reply, media, result)
         await message.reply_text(caption, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await message.reply_text(f"❌ Failed\n\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+    except Exception as e: await message.reply_text(f"❌ Failed\n\n<code>{e}</code>", parse_mode=ParseMode.HTML)
     finally:
         if os.path.exists(tmp): await aioremove(tmp)
 
@@ -524,11 +466,7 @@ async def add_chat(_, message):
         if len(message.command) < 2: return await message.reply_text("❌ Usage: `/add -100123456789`")
         new_id = int(message.command[1])
         authorized_chats.add(new_id)
-        await settings_collection.update_one(
-            {"_id": "allowed_chats"},
-            {"$addToSet": {"chat_ids": new_id}},
-            upsert=True
-        )
+        await settings_collection.update_one( {"_id": "allowed_chats"}, {"$addToSet": {"chat_ids": new_id}}, upsert=True )
         await message.reply_text(f"✅ Added {new_id} to authorized chats.")
     except Exception as e: await message.reply_text(f"❌ Error: {e}")
 
@@ -539,10 +477,7 @@ async def remove_chat(_, message):
         target_id = int(message.command[1])
         if target_id in authorized_chats:
             authorized_chats.remove(target_id)
-            await settings_collection.update_one(
-                {"_id": "allowed_chats"},
-                {"$pull": {"chat_ids": target_id}}
-            )
+            await settings_collection.update_one( {"_id": "allowed_chats"}, {"$pull": {"chat_ids": target_id}} )
             await message.reply_text(f"✅ Removed {target_id} from authorized chats.")
         else: await message.reply_text("❌ Chat ID not found in list.")
     except Exception as e: await message.reply_text(f"❌ Error: {e}")
@@ -554,27 +489,11 @@ async def list_chats(_, message):
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(_, m):
-    await m.reply_text(
-        "<b>🎬 Media Info Bot</b>\n\n"
-        "Send me any video or file and I'll extract detailed media information.\n\n"
-        "I provide:\n"
-        "• 🎞 Video quality, codec &amp; bit depth\n"
-        "• ⏳ Duration\n"
-        "• 🔊 Audio languages\n"
-        "• 💬 Subtitle info\n\n"
-        "<b>⚡ Fast • Clean • Accurate</b>\n\n"
-        "📌 <i>Note:</i> Send one file at a time.\n\n"
-        "🤖 Bot by @piroxbots",
-        parse_mode=ParseMode.HTML,
-    )
+    await m.reply_text( "<b>🎬 Media Info Bot</b>\n\n" "Send me any video or file and I'll extract detailed media information.\n\n" "I provide:\n" "• 🎞 Video quality, codec &amp; bit depth\n" "• ⏳ Duration\n" "• 🔊 Audio languages\n" "• 💬 Subtitle info\n\n" "<b>⚡ Fast • Clean • Accurate</b>\n\n" "📌 <i>Note:</i> Send one file at a time.\n\n" "🤖 Bot by @piroxbots", parse_mode=ParseMode.HTML, )
 
 @app.on_message(filters.command("server") & filters.user(ADMIN_ID))
 async def server_cmd(_, m):
-    await m.reply_text(
-        f"CPU: {psutil.cpu_percent()}%\n"
-        f"RAM: {psutil.virtual_memory().percent}%\n"
-        f"Disk: {psutil.disk_usage('/').percent}%"
-    )
+    await m.reply_text( f"CPU: {psutil.cpu_percent()}%\n" f"RAM: {psutil.virtual_memory().percent}%\n" f"Disk: {psutil.disk_usage('/').percent}%" )
 
 @app.on_message(filters.command("restart") & filters.user(ADMIN_ID))
 async def restart_cmd(_, m):
@@ -607,9 +526,11 @@ def _install_deps():
             subprocess.run(["apt", "install", "-y", pkg], stdout=subprocess.DEVNULL)
 
 async def health_check(request):
+    """Responds to Koyeb pings to keep the instance 'Healthy'"""
     return web.Response(text="Bot is running!", status=200)
 
 async def start_health_server():
+    """Starts the background web server on the port assigned by Koyeb"""
     app_web = web.Application()
     app_web.router.add_get("/", health_check)
     runner = web.AppRunner(app_web)
