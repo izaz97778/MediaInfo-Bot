@@ -9,6 +9,7 @@ import gc
 import re
 import uuid
 import time
+from aiohttp import web  # Added for Health Check
 from aiofiles import open as aiopen
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client, filters
@@ -704,15 +705,39 @@ def _install_deps():
             subprocess.run(["apt", "update", "-y"], stdout=subprocess.DEVNULL)
             subprocess.run(["apt", "install", "-y", pkg], stdout=subprocess.DEVNULL)
 
+# --- KOYEB HEALTH CHECK FEATURE ---
+async def health_check(request):
+    """Responds to Koyeb pings to keep the instance 'Healthy'"""
+    return web.Response(text="Bot is running!", status=200)
+
+async def start_health_server():
+    """Starts the background web server on the port assigned by Koyeb"""
+    app_web = web.Application()
+    app_web.router.add_get("/", health_check)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    
+    # Koyeb uses the 'PORT' environment variable automatically
+    port = int(os.environ.get("PORT", 8080)) 
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Koyeb Health Check server active on port {port}")
 
 async def main():
     gc.set_threshold(*GC_THRESHOLD)
     _install_deps()
 
+    # Start Health Server
+    await start_health_server()
+
     await app.start()
     me = await app.get_me()
     logger.info(f"@{me.username} started")
-    await app.send_message(ADMIN_ID, "🚀 Bot Started")
+    
+    try:
+        await app.send_message(ADMIN_ID, "🚀 Bot Started & Health Check Online")
+    except Exception:
+        pass
 
     scheduler.add_job(gc.collect, "interval", minutes=20)
     scheduler.start()
